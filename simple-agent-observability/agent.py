@@ -20,6 +20,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from strands import Agent
 from strands.telemetry import StrandsTelemetry
 from strands.tools.decorator import tool
+from strands.tools.mcp import MCPClient
+from mcp.client.streamable_http import streamablehttp_client
 
 
 # Configure logging
@@ -105,7 +107,7 @@ def _setup_observability() -> TracerProvider:
     return tracer_provider
 
 
-def _create_agent() -> Agent:
+def _create_agent(mcp_client: Optional[MCPClient] = None) -> Agent:
     """
     Create and configure the Strands agent.
 
@@ -129,7 +131,16 @@ Use the DuckDuckGo search tool to find current information, news, and answers to
 Provide clear, accurate, and helpful responses based on the search results.
 Always cite your sources when using search results."""
 
-    # Create agent with Anthropic Claude 3 Haiku and DuckDuckGo tool
+    # MCP tools (optional)
+    mcp_tools = []
+    if mcp_client is not None:
+        try:
+            mcp_tools = mcp_client.list_tools_sync()
+            logger.info(f"Loaded {len(mcp_tools)} MCP tools from Context7")
+        except Exception as e:
+            logger.warning(f"Failed to load MCP tools: {e}")
+
+    # Create agent with Anthropic Claude 3 Haiku, DuckDuckGo tool, and MCP tools
     # Use Anthropic model directly (not through Bedrock)
     # API key is already set in environment variable above
     from strands.models import AnthropicModel
@@ -143,7 +154,7 @@ Always cite your sources when using search results."""
     agent = Agent(
         system_prompt=system_prompt,
         model=model,
-        tools=[duckduckgo_search]
+        tools=[duckduckgo_search] + mcp_tools
     )
 
     logger.info("Agent created successfully with Braintrust observability")
@@ -176,49 +187,47 @@ def main() -> None:
     """Main function to run the agent."""
     logger.info("Starting Simple Agent with Observability")
 
-    # Create agent
-    agent = _create_agent()
+    # Create MCP client and keep it open for the duration of the session
+    def create_streamable_http_transport():
+        return streamablehttp_client("https://mcp.context7.com/mcp")
 
-    # Example queries to test different tools
-    test_queries = [
-        "What is the latest news about AI?",
-        "How do I use async/await in Python?",
-        "What are the best practices for React hooks?"
-    ]
+    mcp_client = MCPClient(create_streamable_http_transport)
+    with mcp_client:
+        agent = _create_agent(mcp_client=mcp_client)
 
-    print("\n" + "="*80)
-    print("Simple Agent with Observability Demo")
-    print("="*80 + "\n")
+        print("\n" + "=" * 80)
+        print("Simple Agent with Observability Demo")
+        print("=" * 80 + "\n")
 
-    # Run interactive loop
-    print("Ask me anything! I can search the web with DuckDuckGo.")
-    print("Type 'quit' to exit.\n")
+        # Run interactive loop
+        print("Ask me anything! I can search the web with DuckDuckGo.")
+        print("Type 'quit' to exit.\n")
 
-    while True:
-        try:
-            user_input = input("You: ").strip()
+        while True:
+            try:
+                user_input = input("You: ").strip()
 
-            if user_input.lower() in ["quit", "exit", "q"]:
-                print("\nGoodbye!")
+                if user_input.lower() in ["quit", "exit", "q"]:
+                    print("\nGoodbye!")
+                    break
+
+                if not user_input:
+                    continue
+
+                # Run agent
+                response = asyncio.run(_run_agent_async(agent, user_input))
+
+                print(f"\nAgent: {response}\n")
+
+            except EOFError:
+                print("\n\nGoodbye!")
                 break
-
-            if not user_input:
-                continue
-
-            # Run agent
-            response = asyncio.run(_run_agent_async(agent, user_input))
-
-            print(f"\nAgent: {response}\n")
-
-        except EOFError:
-            print("\n\nGoodbye!")
-            break
-        except KeyboardInterrupt:
-            print("\n\nGoodbye!")
-            break
-        except Exception as e:
-            logger.error(f"Error running agent: {e}")
-            print(f"\nError: {e}\n")
+            except KeyboardInterrupt:
+                print("\n\nGoodbye!")
+                break
+            except Exception as e:
+                logger.error(f"Error running agent: {e}")
+                print(f"\nError: {e}\n")
 
 
 if __name__ == "__main__":

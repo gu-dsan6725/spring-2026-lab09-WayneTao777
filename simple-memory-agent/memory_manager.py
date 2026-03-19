@@ -286,42 +286,14 @@ class MemoryManager:
                 f"(limit={limit}, searching across ALL sessions)"
             )
 
-            # Get all run_ids for this user for cross-session recall
-            # Mem0 stores memories under run_id, so we need to query all runs
-            try:
-                users_data = self.memory.users()
-                # Filter for runs (type='run') that belong to this user
-                # Runs are typically named like: user_id-session-N
-                user_runs = [u['name'] for u in users_data.get('results', [])
-                           if u.get('type') == 'run' and u['name'].startswith(user_id + '-')]
-                logger.debug(f"Found {len(user_runs)} runs for user={user_id}: {user_runs}")
-            except Exception as e:
-                logger.warning(f"Could not get user runs, falling back to user_id filter: {e}")
-                user_runs = None
-
-            # Build filters for Mem0 cloud platform
-            # Use OR logic across all user's run_ids for cross-session recall
-            if user_runs and len(user_runs) > 0:
-                filters = {
-                    'OR': [{'run_id': run} for run in user_runs]
-                }
-            else:
-                # Fallback to user_id filter (may not work with current Mem0 API)
-                filters = {"user_id": user_id}
-
-            if agent_id and not user_runs:
+            # Use Mem0 filters; API requires filters to be present.
+            filters: Dict[str, Any] = {"user_id": user_id}
+            if agent_id:
                 filters["agent_id"] = agent_id
-
-            # Combine with any additional metadata filters
-            if metadata_filters and not user_runs:
+            if metadata_filters:
                 filters.update(metadata_filters)
 
-            # Search using Mem0 cloud platform with filters
-            results = self.memory.search(
-                query=query,
-                filters=filters,
-                limit=limit
-            )
+            results = self.memory.search(query=query, filters=filters, limit=limit)
 
             # DEBUG: Log raw results from Mem0
             logger.debug(f"Raw Mem0 search results type: {type(results)}")
@@ -397,8 +369,9 @@ class MemoryManager:
         try:
             logger.info(f"Exporting memories for user={user_id} in {format} format")
 
-            # Get all memories from Mem0 cloud platform
-            all_memories = self.memory.get_all(filters={"user_id": user_id})
+            # Get all memories from Mem0 cloud platform (filters required)
+            result = self.memory.get_all(filters={"user_id": user_id})
+            all_memories = result.get("results", result if isinstance(result, list) else [])
 
             export_data = {
                 "user_id": user_id,
@@ -449,36 +422,11 @@ class MemoryManager:
         try:
             logger.info(f"Retrieving all memories for user={user_id}")
 
-            # Get all run_ids for this user for cross-session recall
-            try:
-                users_data = self.memory.users()
-                user_runs = [u['name'] for u in users_data.get('results', [])
-                           if u.get('type') == 'run' and u['name'].startswith(user_id + '-')]
-                logger.debug(f"Found {len(user_runs)} runs for user={user_id}: {user_runs}")
-            except Exception as e:
-                logger.warning(f"Could not get user runs: {e}")
-                user_runs = []
-
-            # Aggregate memories from all runs for this user
-            all_memories = []
-            if user_runs:
-                for run_id in user_runs:
-                    try:
-                        result = self.memory.get_all(filters={"run_id": run_id})
-                        if isinstance(result, dict):
-                            memories = result.get("results", result.get("memories", []))
-                        else:
-                            memories = result if isinstance(result, list) else []
-                        all_memories.extend(memories)
-                    except Exception as e:
-                        logger.warning(f"Error getting memories for run {run_id}: {e}")
+            result = self.memory.get_all(filters={"user_id": user_id})
+            if isinstance(result, dict):
+                all_memories = result.get("results", result.get("memories", []))
             else:
-                # Fallback: try user_id filter (may not work but worth trying)
-                result = self.memory.get_all(filters={"user_id": user_id})
-                if isinstance(result, dict):
-                    all_memories = result.get("results", result.get("memories", []))
-                else:
-                    all_memories = result if isinstance(result, list) else []
+                all_memories = result if isinstance(result, list) else []
 
             if limit and limit > 0:
                 all_memories = all_memories[:limit]
@@ -515,7 +463,11 @@ class MemoryManager:
             logger.warning(f"Clearing all memories for user: {user_id}")
 
             # Get all memories from Mem0 cloud platform for specific user
-            all_memories = self.memory.get_all(filters={"user_id": user_id})
+            result = self.memory.get_all(filters={"user_id": user_id})
+            if isinstance(result, dict):
+                all_memories = result.get("results", result.get("memories", []))
+            else:
+                all_memories = result if isinstance(result, list) else []
             memory_count = len(all_memories)
 
             # Delete each memory individually using Mem0 cloud platform
@@ -613,7 +565,11 @@ class MemoryManager:
             raise ValueError("user_id cannot be empty")
 
         try:
-            all_memories = self.memory.get_all(filters={"user_id": user_id})
+            result = self.memory.get_all(filters={"user_id": user_id})
+            if isinstance(result, dict):
+                all_memories = result.get("results", result.get("memories", []))
+            else:
+                all_memories = result if isinstance(result, list) else []
 
             stats = {
                 "user_id": user_id,
